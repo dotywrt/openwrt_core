@@ -1,0 +1,117 @@
+name: PI5_CORE
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [sync]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: PI5_CORE - [${{ matrix.target }}]
+    runs-on: ubuntu-24.04
+
+    defaults:
+      run:
+        shell: bash
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - rpi-5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup variables
+        run: |
+          sudo timedatectl set-timezone 'Asia/Kuala_Lumpur'
+
+          if [ "${{ matrix.target }}" = "rpi-5" ]; then
+            echo "target=bcm27xx-bcm2712" >> "$GITHUB_ENV"
+          fi
+
+          echo "TARGET=${{ matrix.target }}" >> "$GITHUB_ENV"
+
+      - name: Show System Info
+        run: |
+          echo "== SYSTEM INFO =="
+          uname -a
+          lscpu
+          free -h
+          df -h
+
+      - name: Install Dependencies
+        run: |
+          sudo apt update
+
+          sudo apt install -y \
+            curl \
+            wget \
+            tar \
+            gzip \
+            xz-utils \
+            zstd \
+            git \
+            jq
+
+      - name: Sync Kernel Modules
+        run: |
+          kmod=$(curl -sk "https://api.github.com/repos/sbwml/builder/releases" \
+            | grep "browser_download_url" \
+            | grep "${{ env.target }}" \
+            | grep "rpi-5" \
+            | sort -V \
+            | tail -1 \
+            | awk '{print $2}' \
+            | sed 's/\"//g')
+
+          echo "Download URL:"
+          echo "$kmod"
+
+          kmod_name=$(basename "$kmod" | sed 's/\.tar\.gz$//;s/^[^-]*-//')
+
+          rm -rf "$kmod_name"
+
+          curl -L "$kmod" -o "$kmod_name.tar.gz" --progress-bar
+
+          tar zxf "$kmod_name.tar.gz"
+
+          rm -f "$kmod_name.tar.gz"
+
+          echo "RELEASE_NAME=$kmod_name" >> "$GITHUB_ENV"
+
+          echo "Release:"
+          echo "$kmod_name"
+
+      - name: Normalize Scripts
+        run: |
+          find ./ -type f \( -name "*.sh" -o -name "*.txt" \) \
+            -exec dos2unix {} \; \
+            -exec chmod +x {} \;
+
+      - name: Git Status
+        run: |
+          git status
+
+      - name: Commit Changes
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add --all
+
+          git commit -sm "${{ env.RELEASE_NAME }}" || echo "No changes to commit"
+
+      - name: Push Changes
+        run: |
+          git push \
+            "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            HEAD:main
